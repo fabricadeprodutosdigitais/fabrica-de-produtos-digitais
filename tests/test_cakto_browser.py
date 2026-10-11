@@ -100,6 +100,60 @@ class Main(Base):
             self.assertEqual(cb.main(), 0)
 
 
+LOGIN_HTML = """<html><body><div id=app></div><script>
+setTimeout(()=>{document.getElementById('app').innerHTML =
+ '<input name=login placeholder="Seu e-mail"><input type=password><button type=submit>Entrar</button>';
+ document.querySelector('button').onclick=()=>{location.href='%s#/painel'};}, 1200);
+</script></body></html>"""
+
+
+class LoginNavegadorReal(unittest.TestCase):
+    """Chromium de verdade contra uma página local que monta o formulário tarde (como um app React)."""
+
+    def test_login_em_pagina_que_renderiza_depois(self):
+        try:
+            from playwright.sync_api import sync_playwright
+            pw = sync_playwright().start()
+            nav = pw.chromium.launch(headless=True)
+        except Exception as e:  # noqa: BLE001
+            self.skipTest(f"sem Chromium: {e}")
+        self.addCleanup(pw.stop)
+        self.addCleanup(nav.close)
+        d = tempfile.mkdtemp()
+        arq = os.path.join(d, "login.html")
+        url = "file://" + arq
+        with open(arq, "w") as f:
+            f.write(LOGIN_HTML % (url.replace("login.html", "ok.html")))
+        with open(os.path.join(d, "ok.html"), "w") as f:
+            f.write("<html>ok</html>")
+        page = nav.new_page()
+        with mock.patch.object(cb, "URL_LOGIN", url + "?login"):
+            # a URL contém "/login"? não: só "login.html"; o critério de saída é sair de '/login' no caminho
+            cb.entrar(page, "a@b.c", "senha")
+        self.assertIn("ok.html", page.url)
+
+    def test_falha_gera_diagnostico_no_log(self):
+        try:
+            from playwright.sync_api import sync_playwright
+            pw = sync_playwright().start()
+            nav = pw.chromium.launch(headless=True)
+        except Exception as e:  # noqa: BLE001
+            self.skipTest(f"sem Chromium: {e}")
+        self.addCleanup(pw.stop)
+        self.addCleanup(nav.close)
+        page = nav.new_page()
+        page.set_content("<html><title>Just a moment...</title><body>Verificando se voce e humano</body></html>")
+        cwd = os.getcwd()
+        os.chdir(tempfile.mkdtemp())
+        self.addCleanup(os.chdir, cwd)
+        with mock.patch("builtins.print") as pr:
+            cb.diagnostico(page, "login")
+        saida = pr.call_args_list[0].args[0]
+        self.assertIn("CAKTO_BROWSER_DIAG", saida)
+        self.assertIn("Just a moment", saida)
+        self.assertTrue(os.path.isfile(os.path.join(cb.PASTA_DEBUG, "login.html")))
+
+
 class Workflow(unittest.TestCase):
     def test_job_cakto_browser_depois_do_fabrica_e_so_com_email(self):
         with open(os.path.join(RAIZ, ".github", "workflows", "produto.yml"), encoding="utf-8") as f:
