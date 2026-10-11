@@ -1,0 +1,121 @@
+"""Plano C da capa: upload pelo painel da Cakto com Playwright (aqui sem navegador: páginas falsas)."""
+import os
+import tempfile
+import unittest
+from unittest import mock
+
+from tests import stubs
+stubs.instalar()
+
+from fabrica_produtos import cakto_browser as cb, catalogo, config_fabrica as cfg, plataformas  # noqa: E402
+from tests.fixtures import produto_bom  # noqa: E402
+from tests.test_cakto import Resp, cliente, produto_api  # noqa: E402
+
+RAIZ = os.path.join(os.path.dirname(__file__), "..")
+NOME = produto_bom()["nome"]
+
+
+class Base(unittest.TestCase):
+    def setUp(self):
+        for k in ("CAKTO_CLIENT_ID", "CAKTO_CLIENT_SECRET", "CAKTO_EMAIL", "CAKTO_PASSWORD"):
+            self.addCleanup(os.environ.pop, k, None)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        cfg.CATALOGO_PATH = os.path.join(self.tmp.name, "catalogo.json")
+        r = catalogo.adicionar(produto_bom(), "aprovado", "x")
+        catalogo.atualizar(r["id"], "ok", status="pronto", link_compra="https://pay.cakto.com.br/abc", plataforma="cakto")
+        self.pid = r["id"]
+
+    def api(self, imagem):
+        sem = produto_api(NOME, pid="u1")
+        lista = Resp(200, {"results": [sem]})
+        c, srv = cliente({("GET", "/public_api/products/"): lista,
+                          ("GET", "/public_api/products/u1/"): Resp(200, {**sem, "image": imagem})})
+        p = mock.patch.object(plataformas.requests, "request", srv)
+        p.start()
+        self.addCleanup(p.stop)
+        return c
+
+
+class Pendentes(Base):
+    def test_so_lista_produto_sem_imagem_e_gera_a_capa_se_faltar(self):
+        c = self.api(None)
+        with mock.patch("fabrica_produtos.registrador.gerar_capa_produto", return_value="docs/capas/x.png"):
+            itens = cb.pendentes(c)
+        self.assertEqual([(i[0]["id"], i[1]) for i in itens], [(self.pid, "u1")])
+
+    def test_produto_com_imagem_e_pulado(self):
+        c = self.api("https://cdn/x.png")
+        self.assertEqual(cb.pendentes(c), [])
+
+
+class Processar(Base):
+    def test_ok_so_quando_a_api_confirma_image(self):
+        c = self.api("https://cdn/x.png")
+        item = (catalogo.obter(self.pid), "u1", "docs/capas/x.png")
+        with mock.patch.object(cb, "abrir_edicao"), mock.patch.object(cb, "enviar_capa"), \
+                mock.patch("builtins.print") as pr:
+            res = cb.processar(mock.Mock(), c, [item])
+        self.assertEqual(res, {self.pid: True})
+        self.assertIn(f"CAKTO_BROWSER_UPLOAD {self.pid} OK", pr.call_args_list[0].args[0])
+
+    def test_salvou_mas_image_null_conta_como_falha(self):
+        c = self.api(None)
+        item = (catalogo.obter(self.pid), "u1", "docs/capas/x.png")
+        with mock.patch.object(cb, "abrir_edicao"), mock.patch.object(cb, "enviar_capa"), mock.patch("builtins.print"):
+            self.assertEqual(cb.processar(mock.Mock(), c, [item]), {self.pid: False})
+
+    def test_erro_em_um_produto_nao_derruba_os_outros(self):
+        c = self.api("https://cdn/x.png")
+        item = (catalogo.obter(self.pid), "u1", "x.png")
+        chamadas = []
+
+        def abrir(page, nome, cid):
+            chamadas.append(nome)
+            if len(chamadas) == 1:
+                raise RuntimeError("painel mudou")
+        with mock.patch.object(cb, "abrir_edicao", abrir), mock.patch.object(cb, "enviar_capa"), \
+                mock.patch.object(cb, "_debug") as dbg, mock.patch("builtins.print"):
+            res = cb.processar(mock.Mock(), c, [item, item])
+        self.assertEqual(list(res.values()), [True])  # mesmo id: o 2º sobrescreve o 1º; o 1º falhou e foi depurado
+        dbg.assert_called_once()
+
+    def test_enviar_capa_usa_input_file_e_clica_salvar(self):
+        page = mock.MagicMock()
+        with mock.patch.object(cb, "_primeiro_visivel", return_value=mock.Mock()) as pv:
+            cb.enviar_capa(page, "docs/capas/x.png")
+        page.locator.assert_called_with("input[type=file]")
+        page.locator.return_value.first.set_input_files.assert_called_with("docs/capas/x.png")
+        pv.return_value.click.assert_called_once()
+
+
+class Main(Base):
+    def test_sem_email_ou_senha_sai_sem_erro(self):
+        with mock.patch("builtins.print"):
+            self.assertEqual(cb.main(), 0)
+
+    def test_sem_pendentes_nao_abre_navegador(self):
+        os.environ.update(CAKTO_EMAIL="a@b.c", CAKTO_PASSWORD="s", CAKTO_CLIENT_ID="i", CAKTO_CLIENT_SECRET="s")
+        with mock.patch.object(cb, "pendentes", return_value=[]), mock.patch("builtins.print"):
+            self.assertEqual(cb.main(), 0)
+
+
+class Workflow(unittest.TestCase):
+    def test_job_cakto_browser_depois_do_fabrica_e_so_com_email(self):
+        with open(os.path.join(RAIZ, ".github", "workflows", "produto.yml"), encoding="utf-8") as f:
+            txt = f.read()
+        j = txt[txt.index("  cakto-browser:"):]
+        self.assertIn("needs: fabrica", j)
+        self.assertIn("CAKTO_EMAIL: ${{ secrets.CAKTO_EMAIL }}", j)
+        self.assertIn("env.CAKTO_EMAIL != ''", j)
+        self.assertIn("playwright install", j)
+        self.assertIn("python -m fabrica_produtos.cakto_browser", j)
+        self.assertIn("CAKTO_EXIGE_IMAGEM: ${{ vars.CAKTO_EXIGE_IMAGEM || 'false' }}", j)
+
+    def test_urls_do_painel(self):
+        self.assertEqual(cb.URL_LOGIN, "https://app.cakto.com.br/login")
+        self.assertIn("dashboard/products?tab=products&flow=v2", cb.URL_PRODUTOS)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -299,3 +299,21 @@ Os produtos apareciam "Sem imagem" porque o robô nunca enviava capa (e nem gera
   produtos `pronto` com link válido (2 fatias por dia, antes/depois das 20h UTC). `PRODUTO_DA_VEZ_ID` fixa um produto
   (e é definido na primeira chamada, para `main.py`, ferramentas e config do Low Ticket concordarem na mesma execução).
   A criação diária de 3 produtos novos (`FABRICA_MAX_POR_DIA=3`) continua alimentando o rodízio.
+
+## Upload da capa pelo painel da Cakto (PR #24)
+
+A API da Cakto devolve 200 mas não grava `image` (e `/upload`, `/files`, `/media`, `/images`, `/uploads` e
+`products/{id}/image` dão 404). O job **cakto-browser** do `produto.yml` roda depois do job `fabrica` e faz o que você faria
+no painel, com Playwright (Chromium headless):
+
+1. Entra em `https://app.cakto.com.br/login` com os Secrets `CAKTO_EMAIL` e `CAKTO_PASSWORD` (conta sem 2FA).
+2. Abre `dashboard/products?tab=products&flow=v2`, e para cada produto **Sem imagem** (conferido pela API): Editar produto,
+   `input[type=file]` = `docs/capas/{id}.png`, Salvar.
+3. Confirma com `GET /public_api/products/{id}/` (`image` != null) e loga `CAKTO_BROWSER_UPLOAD {id} OK` (ou `FALHOU: ...`).
+
+- Sem `CAKTO_EMAIL` o job não faz nada. O passo tem `continue-on-error`: se o painel mudar, o produto segue Ativo,
+  `CAKTO_EXIGE_IMAGEM` continua `false` e o zip `capas-cakto` permite o upload manual.
+- Em falha, screenshots vão para o artefato `cakto-browser-debug` (7 dias). Os seletores do painel não são documentados;
+  o primeiro run real mostra se precisam de ajuste.
+- Rodar à mão: Actions > produto.yml > Run workflow (qualquer ação, ex. `status`) ou `python -m fabrica_produtos.cakto_browser`
+  com os Secrets no ambiente (precisa `pip install playwright && playwright install chromium`).
