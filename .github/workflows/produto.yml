@@ -129,3 +129,46 @@ jobs:
           path: catalogo/pacotes/
           if-no-files-found: ignore
           retention-days: 14
+
+  cakto-browser:
+    # Plano C da capa: a API da Cakto responde 200 mas nao grava `image`; o navegador sobe a capa pelo painel.
+    # (`secrets` nao existe no `if` de job: o segredo entra por env e e checado no passo.)
+    needs: fabrica
+    if: always() && needs.fabrica.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CAKTO_EMAIL: ${{ secrets.CAKTO_EMAIL }}
+      CAKTO_PASSWORD: ${{ secrets.CAKTO_PASSWORD }}
+      CAKTO_CLIENT_ID: ${{ secrets.CAKTO_CLIENT_ID }}
+      CAKTO_CLIENT_SECRET: ${{ secrets.CAKTO_CLIENT_SECRET }}
+      CAKTO_EXIGE_IMAGEM: ${{ vars.CAKTO_EXIGE_IMAGEM || 'false' }}
+    steps:
+      - name: Sem CAKTO_EMAIL o job nao faz nada
+        if: env.CAKTO_EMAIL == ''
+        run: echo "CAKTO_EMAIL nao definido; upload pelo navegador desativado."
+      - uses: actions/checkout@v4
+        if: env.CAKTO_EMAIL != ''
+        with:
+          ref: ${{ github.ref_name }}   # pega o commit do catalogo e das capas feito pelo job anterior
+      - uses: actions/setup-python@v5
+        if: env.CAKTO_EMAIL != ''
+        with:
+          python-version: "3.11"
+      - name: Instala dependencias e o Chromium
+        if: env.CAKTO_EMAIL != ''
+        run: |
+          pip install requests pillow playwright
+          playwright install --with-deps chromium
+      - name: Sobe as capas pelo painel da Cakto
+        if: env.CAKTO_EMAIL != ''
+        continue-on-error: true   # painel mudou/captcha: o produto segue Ativo e o zip capas-cakto permite o upload manual
+        run: python -m fabrica_produtos.cakto_browser
+      - name: Screenshots de depuracao
+        if: always() && env.CAKTO_EMAIL != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: cakto-browser-debug
+          path: cakto-browser-debug/
+          if-no-files-found: ignore
+          retention-days: 7
