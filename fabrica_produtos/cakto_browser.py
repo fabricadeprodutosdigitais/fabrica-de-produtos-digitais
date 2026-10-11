@@ -15,7 +15,8 @@ from . import catalogo, config_fabrica as cfg, plataformas
 URL_LOGIN = "https://app.cakto.com.br/login"   # deu 404 no run real: só é a última opção
 # O painel redireciona quem não está logado para a tela de login de verdade, então o caminho certo é abrir o painel
 # (e a raiz) e deixar o app decidir; as demais são palpites de rotas comuns.
-URLS_ENTRADA = ("https://app.cakto.com.br/dashboard/products?tab=products&flow=v2", "https://app.cakto.com.br/",
+URL_SSO = "https://sso.cakto.com.br/accounts/login/?next=https%3A%2F%2Fapp.cakto.com.br%2Fdashboard%2Fhome%2F"
+URLS_ENTRADA = (URL_SSO, "https://app.cakto.com.br/dashboard/products?tab=products&flow=v2", "https://app.cakto.com.br/",
                 "https://app.cakto.com.br/auth/login", "https://app.cakto.com.br/sign-in",
                 "https://app.cakto.com.br/signin", "https://app.cakto.com.br/entrar", URL_LOGIN)
 URL_PRODUTOS = "https://app.cakto.com.br/dashboard/products?tab=products&flow=v2"
@@ -52,7 +53,7 @@ def _primeiro_visivel(page, candidatos, tempo=TEMPO):
     return None
 
 
-CAMPOS_EMAIL = ("input[type=email]", "input[name=email]", "input[name=username]", "input[autocomplete=username]",
+CAMPOS_EMAIL = ("input[name=email]", "input[type=email]", "input[name=login]", "input[id=id_login]", "input[name=username]", "input[autocomplete=username]",
                 "input[autocomplete=email]", "input[id*=email i]", "input[placeholder*=mail i]",
                 "input[type=text]:not([type=password])")
 
@@ -73,6 +74,17 @@ def diagnostico(page, rotulo: str) -> None:
             f.write(page.content())
     except Exception:  # noqa: BLE001
         pass
+
+
+def _log_sso(page) -> None:
+    """Uma linha com o que a tela de login (SSO) mostra, para ajustar rápido se o formulário mudar."""
+    try:
+        tem_email = any(page.locator(c).count() for c in CAMPOS_EMAIL)
+        tem_senha = page.locator("input[type=password], input[name=password]").count() > 0
+        print(f"CAKTO_BROWSER_DIAG sso_url={page.url} titulo={page.title()!r} tem_email={bool(tem_email)} "
+              f"tem_senha={tem_senha}", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"CAKTO_BROWSER_DIAG sso indisponivel ({type(e).__name__})", flush=True)
 
 
 def _fechar_avisos(page) -> None:
@@ -105,7 +117,7 @@ def _entrar_pelo_site(page, senha_loc) -> bool:
 
 def entrar(page, email: str, senha: str) -> None:
     """O painel é um app React: espera a rede assentar e dá 40 s por variação do campo. Falhou? diagnóstico no log."""
-    senha_loc = page.locator("input[type=password]")
+    senha_loc = page.locator("input[type=password], input[name=password]")
     achou = False
     for url in URLS_ENTRADA:
         try:
@@ -115,12 +127,14 @@ def entrar(page, email: str, senha: str) -> None:
             except Exception:  # noqa: BLE001 - pode haver polling eterno; segue assim mesmo
                 pass
             _fechar_avisos(page)
-            senha_loc.first.wait_for(state="visible", timeout=15_000)
+            senha_loc.first.wait_for(state="visible", timeout=30_000 if url == URL_SSO else 15_000)
+            _log_sso(page)
             achou = True
             print(f"CAKTO_BROWSER: tela de login em {page.url}", flush=True)
             break
         except Exception:  # noqa: BLE001
             print(f"CAKTO_BROWSER: sem formulário de login em {url} (parou em {page.url})", flush=True)
+            _log_sso(page)
     if not achou:
         achou = _entrar_pelo_site(page, senha_loc)
     if not achou:
@@ -143,6 +157,10 @@ def entrar(page, email: str, senha: str) -> None:
     try:
         # logou = o campo de senha sumiu (a URL de login pode nem ter "login" no nome)
         page.wait_for_function("() => !document.querySelector('input[type=password]')", timeout=45_000)
+        try:  # o SSO devolve para o painel (next=...dashboard/home); espera chegar lá
+            page.wait_for_url(re.compile(r"^https://app\.cakto\.com\.br/"), timeout=30_000)
+        except Exception:  # noqa: BLE001
+            pass
     except Exception:  # noqa: BLE001
         diagnostico(page, "login-apos-enviar")  # senha errada, captcha ou pedido de verificação
         raise RuntimeError("continua na tela de login depois de enviar (credenciais, captcha ou verificação?)")
@@ -240,7 +258,11 @@ def main() -> int:
             _debug(page, "login")
             navegador.close()
             return 1
-        print("CAKTO_BROWSER_LOGIN OK", flush=True)
+        print(f"CAKTO_BROWSER_LOGIN OK (em {page.url})", flush=True)
+        try:  # depois do login vai direto à lista de produtos
+            page.goto(URL_PRODUTOS, wait_until="domcontentloaded", timeout=TEMPO)
+        except Exception as e:  # noqa: BLE001
+            print(f"CAKTO_BROWSER: não abriu a lista de produtos ({type(e).__name__}); cada produto abre a sua", flush=True)
         res = processar(page, plat, itens)
         navegador.close()
     falhas = [i for i, ok in res.items() if not ok]
