@@ -46,6 +46,10 @@
         {
           "quando": "2026-10-04T12:57:11-03:00",
           "evento": "pacote pronto; aguardando cadastro na plataforma"
+        },
+        {
+          "quando": "2026-10-10T21:49:49-03:00",
+          "evento": "encontrado na cakto, mas a API não devolveu o link: use definir-link"
         }
       ]
     },
