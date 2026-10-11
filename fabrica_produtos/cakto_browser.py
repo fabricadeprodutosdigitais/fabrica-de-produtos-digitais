@@ -12,7 +12,12 @@ import sys
 
 from . import catalogo, config_fabrica as cfg, plataformas
 
-URL_LOGIN = "https://app.cakto.com.br/login"
+URL_LOGIN = "https://app.cakto.com.br/login"   # deu 404 no run real: só é a última opção
+# O painel redireciona quem não está logado para a tela de login de verdade, então o caminho certo é abrir o painel
+# (e a raiz) e deixar o app decidir; as demais são palpites de rotas comuns.
+URLS_ENTRADA = ("https://app.cakto.com.br/dashboard/products?tab=products&flow=v2", "https://app.cakto.com.br/",
+                "https://app.cakto.com.br/auth/login", "https://app.cakto.com.br/sign-in",
+                "https://app.cakto.com.br/signin", "https://app.cakto.com.br/entrar", URL_LOGIN)
 URL_PRODUTOS = "https://app.cakto.com.br/dashboard/products?tab=products&flow=v2"
 PASTA_DEBUG = "cakto-browser-debug"
 TEMPO = 30_000  # ms por espera
@@ -81,18 +86,44 @@ def _fechar_avisos(page) -> None:
             continue
 
 
+def _entrar_pelo_site(page, senha_loc) -> bool:
+    """Último recurso: abre o site institucional e clica em Entrar/Login, como uma pessoa faria."""
+    try:
+        page.goto("https://cakto.com.br/", wait_until="domcontentloaded", timeout=60_000)
+        link = _primeiro_visivel(page, [page.get_by_role("link", name=re.compile(r"^\s*(entrar|login|acessar)", re.I)),
+                                        page.get_by_role("button", name=re.compile(r"^\s*(entrar|login|acessar)", re.I))],
+                                 15_000)
+        if link is None:
+            return False
+        link.click()
+        senha_loc.first.wait_for(state="visible", timeout=30_000)
+        print(f"CAKTO_BROWSER: tela de login em {page.url} (via site)", flush=True)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def entrar(page, email: str, senha: str) -> None:
     """O painel é um app React: espera a rede assentar e dá 40 s por variação do campo. Falhou? diagnóstico no log."""
-    page.goto(URL_LOGIN, wait_until="domcontentloaded", timeout=60_000)
-    try:
-        page.wait_for_load_state("networkidle", timeout=30_000)
-    except Exception:  # noqa: BLE001 - pode haver polling eterno; segue assim mesmo
-        pass
-    _fechar_avisos(page)
     senha_loc = page.locator("input[type=password]")
-    try:
-        senha_loc.first.wait_for(state="visible", timeout=40_000)
-    except Exception:  # noqa: BLE001
+    achou = False
+    for url in URLS_ENTRADA:
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+            try:
+                page.wait_for_load_state("networkidle", timeout=20_000)
+            except Exception:  # noqa: BLE001 - pode haver polling eterno; segue assim mesmo
+                pass
+            _fechar_avisos(page)
+            senha_loc.first.wait_for(state="visible", timeout=15_000)
+            achou = True
+            print(f"CAKTO_BROWSER: tela de login em {page.url}", flush=True)
+            break
+        except Exception:  # noqa: BLE001
+            print(f"CAKTO_BROWSER: sem formulário de login em {url} (parou em {page.url})", flush=True)
+    if not achou:
+        achou = _entrar_pelo_site(page, senha_loc)
+    if not achou:
         diagnostico(page, "login")
         raise RuntimeError("tela de login não carregou (sem campo de senha); veja CAKTO_BROWSER_DIAG e o artefato")
     campo_email = _primeiro_visivel(page, [page.locator(c) for c in CAMPOS_EMAIL] +
@@ -110,7 +141,8 @@ def entrar(page, email: str, senha: str) -> None:
     else:
         botao.click()
     try:
-        page.wait_for_url(lambda u: "/login" not in u, timeout=45_000)
+        # logou = o campo de senha sumiu (a URL de login pode nem ter "login" no nome)
+        page.wait_for_function("() => !document.querySelector('input[type=password]')", timeout=45_000)
     except Exception:  # noqa: BLE001
         diagnostico(page, "login-apos-enviar")  # senha errada, captcha ou pedido de verificação
         raise RuntimeError("continua na tela de login depois de enviar (credenciais, captcha ou verificação?)")

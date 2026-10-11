@@ -322,3 +322,9 @@ no painel, com Playwright (Chromium headless):
 `entrar()` espera a rede assentar (o painel é um app React), fecha banner de cookies, dá 40 s para o campo de senha e 21 s
 para as variações do campo de e-mail. Se falhar, imprime `CAKTO_BROWSER_DIAG` (URL, título, campos e texto da tela, que
 revelam bloqueio tipo Cloudflare/captcha) e guarda `login.png`/`login.html` no artefato `cakto-browser-debug`.
+
+### URL de login (PR #26)
+`https://app.cakto.com.br/login` não existe (404, visto no run real). `entrar()` agora abre primeiro o painel de produtos
+(que redireciona para o login verdadeiro quando não há sessão), depois a raiz e rotas comuns (`/auth/login`, `/sign-in`...),
+e por fim o site cakto.com.br clicando em Entrar. A URL em que o formulário apareceu sai no log
+(`CAKTO_BROWSER: tela de login em ...`). O login só conta como feito quando o campo de senha some.

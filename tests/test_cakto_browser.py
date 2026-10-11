@@ -119,16 +119,29 @@ class LoginNavegadorReal(unittest.TestCase):
             self.skipTest(f"sem Chromium: {e}")
         self.addCleanup(pw.stop)
         self.addCleanup(nav.close)
+        import http.server
+        import threading
         d = tempfile.mkdtemp()
-        arq = os.path.join(d, "login.html")
-        url = "file://" + arq
-        with open(arq, "w") as f:
-            f.write(LOGIN_HTML % (url.replace("login.html", "ok.html")))
+        with open(os.path.join(d, "login.html"), "w") as f:
+            f.write("")  # preenchido abaixo, quando a porta é conhecida
         with open(os.path.join(d, "ok.html"), "w") as f:
             f.write("<html>ok</html>")
+
+        class H(http.server.SimpleHTTPRequestHandler):
+            def __init__(self, *a, **k):
+                super().__init__(*a, directory=d, **k)
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        base = f"http://127.0.0.1:{srv.server_port}"
+        with open(os.path.join(d, "login.html"), "w") as f:
+            f.write(LOGIN_HTML % f"{base}/ok.html")
         page = nav.new_page()
-        with mock.patch.object(cb, "URL_LOGIN", url + "?login"):
-            # a URL contém "/login"? não: só "login.html"; o critério de saída é sair de '/login' no caminho
+        # 1ª URL dá 404 (como o /login real), a 2ª é a tela de login que monta o formulário com atraso
+        with mock.patch.object(cb, "URLS_ENTRADA", (f"{base}/nao-existe.html", f"{base}/login.html")):
             cb.entrar(page, "a@b.c", "senha")
         self.assertIn("ok.html", page.url)
 
@@ -166,8 +179,9 @@ class Workflow(unittest.TestCase):
         self.assertIn("python -m fabrica_produtos.cakto_browser", j)
         self.assertIn("CAKTO_EXIGE_IMAGEM: ${{ vars.CAKTO_EXIGE_IMAGEM || 'false' }}", j)
 
-    def test_urls_do_painel(self):
-        self.assertEqual(cb.URL_LOGIN, "https://app.cakto.com.br/login")
+    def test_entrada_comeca_pelo_painel_que_redireciona_para_o_login_real(self):
+        self.assertIn("dashboard/products", cb.URLS_ENTRADA[0])
+        self.assertIn(cb.URL_LOGIN, cb.URLS_ENTRADA)   # o /login que deu 404 fica só como último palpite
         self.assertIn("dashboard/products?tab=products&flow=v2", cb.URL_PRODUTOS)
 
 
