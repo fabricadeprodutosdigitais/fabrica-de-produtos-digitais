@@ -167,6 +167,23 @@ class LoginNavegadorReal(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(cb.PASTA_DEBUG, "login.html")))
 
 
+class DiagSSO(unittest.TestCase):
+    def test_linha_sso_mostra_url_titulo_e_campos(self):
+        page = mock.MagicMock()
+        page.url, page.title.return_value = cb.URL_SSO, "Entrar | Cakto"
+        page.locator.return_value.count.return_value = 1
+        with mock.patch("builtins.print") as pr:
+            cb._log_sso(page)
+        linha = pr.call_args_list[0].args[0]
+        for trecho in ("CAKTO_BROWSER_DIAG sso_url=https://sso.cakto.com.br", "titulo='Entrar | Cakto'",
+                       "tem_email=True", "tem_senha=True"):
+            self.assertIn(trecho, linha)
+
+    def test_campos_cobrem_name_email_type_email_e_login(self):
+        for c in ("input[name=email]", "input[type=email]", "input[name=login]"):
+            self.assertIn(c, cb.CAMPOS_EMAIL)
+
+
 class Workflow(unittest.TestCase):
     def test_job_cakto_browser_depois_do_fabrica_e_so_com_email(self):
         with open(os.path.join(RAIZ, ".github", "workflows", "produto.yml"), encoding="utf-8") as f:
@@ -180,7 +197,10 @@ class Workflow(unittest.TestCase):
         self.assertIn("CAKTO_EXIGE_IMAGEM: ${{ vars.CAKTO_EXIGE_IMAGEM || 'false' }}", j)
 
     def test_entrada_comeca_pelo_painel_que_redireciona_para_o_login_real(self):
-        self.assertIn("dashboard/products", cb.URLS_ENTRADA[0])
+        self.assertEqual(cb.URLS_ENTRADA[0], cb.URL_SSO)
+        self.assertTrue(cb.URL_SSO.startswith("https://sso.cakto.com.br/accounts/login/?next="))
+        self.assertIn("dashboard%2Fhome", cb.URL_SSO)
+        self.assertIn("dashboard/products", cb.URLS_ENTRADA[1])
         self.assertIn(cb.URL_LOGIN, cb.URLS_ENTRADA)   # o /login que deu 404 fica só como último palpite
         self.assertIn("dashboard/products?tab=products&flow=v2", cb.URL_PRODUTOS)
 

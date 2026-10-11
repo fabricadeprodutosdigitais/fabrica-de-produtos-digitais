@@ -328,3 +328,9 @@ revelam bloqueio tipo Cloudflare/captcha) e guarda `login.png`/`login.html` no a
 (que redireciona para o login verdadeiro quando não há sessão), depois a raiz e rotas comuns (`/auth/login`, `/sign-in`...),
 e por fim o site cakto.com.br clicando em Entrar. A URL em que o formulário apareceu sai no log
 (`CAKTO_BROWSER: tela de login em ...`). O login só conta como feito quando o campo de senha some.
+
+### Login pelo SSO (PR #27)
+O login real é `https://sso.cakto.com.br/accounts/login/?next=...dashboard/home/`. `entrar()` começa por ele: espera até 30 s
+pelo campo de senha (`input[type=password]`/`[name=password]`), aceita `name=email`, `type=email` ou `name=login` para o e-mail,
+preenche, clica Entrar (ou Enter) e espera a volta ao `app.cakto.com.br`; depois abre `dashboard/products?tab=products&flow=v2`.
+Log: `CAKTO_BROWSER_DIAG sso_url=... titulo=... tem_email=... tem_senha=...`.
