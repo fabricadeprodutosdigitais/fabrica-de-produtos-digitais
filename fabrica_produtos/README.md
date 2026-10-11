@@ -317,3 +317,8 @@ no painel, com Playwright (Chromium headless):
   o primeiro run real mostra se precisam de ajuste.
 - Rodar à mão: Actions > produto.yml > Run workflow (qualquer ação, ex. `status`) ou `python -m fabrica_produtos.cakto_browser`
   com os Secrets no ambiente (precisa `pip install playwright && playwright install chromium`).
+
+### Login do painel que não carrega (PR #25)
+`entrar()` espera a rede assentar (o painel é um app React), fecha banner de cookies, dá 40 s para o campo de senha e 21 s
+para as variações do campo de e-mail. Se falhar, imprime `CAKTO_BROWSER_DIAG` (URL, título, campos e texto da tela, que
+revelam bloqueio tipo Cloudflare/captcha) e guarda `login.png`/`login.html` no artefato `cakto-browser-debug`.

@@ -47,21 +47,73 @@ def _primeiro_visivel(page, candidatos, tempo=TEMPO):
     return None
 
 
+CAMPOS_EMAIL = ("input[type=email]", "input[name=email]", "input[name=username]", "input[autocomplete=username]",
+                "input[autocomplete=email]", "input[id*=email i]", "input[placeholder*=mail i]",
+                "input[type=text]:not([type=password])")
+
+
+def diagnostico(page, rotulo: str) -> None:
+    """Imprime no log o que o robô está vendo (URL, título, campos, texto) e guarda screenshot + HTML no artefato."""
+    try:
+        campos = page.evaluate("""() => [...document.querySelectorAll('input,button,iframe')].slice(0, 25).map(e =>
+            e.tagName.toLowerCase() + '[type=' + (e.type || '') + ',name=' + (e.name || '') + ',id=' + (e.id || '') +
+            ',ph=' + (e.placeholder || '') + ',txt=' + (e.innerText || '').slice(0, 30) + ']')""")
+        texto = (page.inner_text("body") or "")[:400].replace("\n", " | ")
+        print(f"CAKTO_BROWSER_DIAG {rotulo} url={page.url} titulo={page.title()!r} campos={campos} texto={texto!r}", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"CAKTO_BROWSER_DIAG {rotulo} indisponivel ({type(e).__name__})", flush=True)
+    _debug(page, rotulo)
+    try:
+        with open(os.path.join(PASTA_DEBUG, f"{rotulo}.html"), "w", encoding="utf-8") as f:
+            f.write(page.content())
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _fechar_avisos(page) -> None:
+    """Banner de cookies/LGPD costuma cobrir o formulário."""
+    for nome in ("aceitar", "aceito", "concordo", "entendi", "ok", "accept"):
+        try:
+            b = page.get_by_role("button", name=re.compile(rf"^\s*{nome}", re.I)).first
+            if b.is_visible(timeout=500):
+                b.click(timeout=1500)
+        except Exception:  # noqa: BLE001
+            continue
+
+
 def entrar(page, email: str, senha: str) -> None:
-    page.goto(URL_LOGIN, wait_until="domcontentloaded", timeout=TEMPO)
-    campo_email = _primeiro_visivel(page, [page.locator("input[type=email]"), page.locator("input[name=email]"),
-                                           page.get_by_label(re.compile("e-?mail", re.I))])
+    """O painel é um app React: espera a rede assentar e dá 40 s por variação do campo. Falhou? diagnóstico no log."""
+    page.goto(URL_LOGIN, wait_until="domcontentloaded", timeout=60_000)
+    try:
+        page.wait_for_load_state("networkidle", timeout=30_000)
+    except Exception:  # noqa: BLE001 - pode haver polling eterno; segue assim mesmo
+        pass
+    _fechar_avisos(page)
+    senha_loc = page.locator("input[type=password]")
+    try:
+        senha_loc.first.wait_for(state="visible", timeout=40_000)
+    except Exception:  # noqa: BLE001
+        diagnostico(page, "login")
+        raise RuntimeError("tela de login não carregou (sem campo de senha); veja CAKTO_BROWSER_DIAG e o artefato")
+    campo_email = _primeiro_visivel(page, [page.locator(c) for c in CAMPOS_EMAIL] +
+                                    [page.get_by_label(re.compile("e-?mail|usu", re.I))], 21_000)
     if campo_email is None:
+        diagnostico(page, "login")
         raise RuntimeError("campo de e-mail não apareceu na tela de login")
+    campo_email.click()
     campo_email.fill(email)
-    page.locator("input[type=password]").first.fill(senha)
-    botao = _primeiro_visivel(page, [page.get_by_role("button", name=re.compile(r"entrar|login|acessar", re.I)),
+    senha_loc.first.fill(senha)
+    botao = _primeiro_visivel(page, [page.get_by_role("button", name=re.compile(r"entrar|login|acessar|continuar", re.I)),
                                      page.locator("button[type=submit]")], 10_000)
     if botao is None:
-        page.locator("input[type=password]").first.press("Enter")
+        senha_loc.first.press("Enter")
     else:
         botao.click()
-    page.wait_for_url(lambda u: "/login" not in u, timeout=TEMPO)
+    try:
+        page.wait_for_url(lambda u: "/login" not in u, timeout=45_000)
+    except Exception:  # noqa: BLE001
+        diagnostico(page, "login-apos-enviar")  # senha errada, captcha ou pedido de verificação
+        raise RuntimeError("continua na tela de login depois de enviar (credenciais, captcha ou verificação?)")
 
 
 def abrir_edicao(page, nome: str, cakto_id: str) -> None:
@@ -144,8 +196,11 @@ def main() -> int:
     print(f"CAKTO_BROWSER: {len(itens)} produto(s) sem imagem.")
     from playwright.sync_api import sync_playwright
     with sync_playwright() as pw:
-        navegador = pw.chromium.launch(headless=True)
-        page = navegador.new_context(viewport={"width": 1366, "height": 900}, locale="pt-BR").new_page()
+        navegador = pw.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
+        page = navegador.new_context(
+            viewport={"width": 1366, "height": 900}, locale="pt-BR", timezone_id="America/Sao_Paulo",
+            user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36")).new_page()
         try:
             entrar(page, email, senha)
         except Exception as e:  # noqa: BLE001
