@@ -1,38 +1,76 @@
-name: Executar Fabrica de Infoprodutos
+name: Executar Fabrica de Infoprodutos - Corrigido (1 post por dia)
+
+# CORRIGIDO pos-suspensao #4851740
+# Problemas do original:
+# - 3 tentativas com troca de provedor = ate 3 execucoes do main.py por dia
+# - Sem trava de pausa, sem concurrency
+# - Postava em Facebook + Instagram no mesmo job que o reels.yml tambem posta
+#   = risco de post duplicado no mesmo dia
+# Correcao:
+# - 1 cron, 1 tentativa, sem loop de retry
+# - Pausado por padrao (MAIN_PAUSADO=true). Para religar: MAIN_PAUSADO=false em Variables
+# - Sem commit, sem Pages, sem index.html
+# - DEIXE DESATIVADO por 2-3 semanas apos o desbloqueio. Reels.yml ja faz 1 Reel/dia.
 
 on:
-  workflow_dispatch: # Permite disparar manualmente pelo painel do GitHub
+  workflow_dispatch:
   schedule:
-    - cron: '0 17 * * *' # 1 vez ao dia (17h UTC = 14h Brasilia)
+    - cron: '0 17 * * *' # 1x/dia, 14:00 Brasilia
+
+permissions:
+  contents: read
+
+concurrency:
+  group: main-fabrica
+  cancel-in-progress: false
 
 jobs:
   run-crew:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
+    env:
+      MAIN_PAUSADO: ${{ vars.MAIN_PAUSADO || 'true' }}  # true = nao posta, so simula. Mude para false para religar.
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
+      GH_PAT_VARIABLES: ${{ secrets.GH_PAT_VARIABLES }}
+      FABRICA_HASHTAGS_INSTAGRAM: ${{ vars.FABRICA_HASHTAGS_INSTAGRAM || secrets.FABRICA_HASHTAGS_INSTAGRAM || '20' }}
+      FABRICA_HASHTAGS_FACEBOOK: ${{ vars.FABRICA_HASHTAGS_FACEBOOK || secrets.FABRICA_HASHTAGS_FACEBOOK || '20' }}
+      MODEL: ${{ secrets.MODEL }}
+      PRODUTO_TOPICO: ${{ secrets.PRODUTO_TOPICO }}
+      IMAGEM_PADRAO_URL: ${{ secrets.IMAGEM_PADRAO_URL }}
+      UNSPLASH_API_KEY: ${{ secrets.UNSPLASH_API_KEY }}
+      META_APP_ID: ${{ secrets.META_APP_ID }}
+      META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
+      META_LONG_LIVED_TOKEN: ${{ secrets.META_LONG_LIVED_TOKEN }}
+      FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+      INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
+      BUSINESS_PORTFOLIO_ID: ${{ secrets.BUSINESS_PORTFOLIO_ID }}
+      DRY_RUN: ${{ secrets.DRY_RUN || 'true' }}  # true = simula, nao publica. Para publicar: DRY_RUN=false
     steps:
-      - name: Checkout do Repositório
+      - name: Checa pausa
+        run: |
+          if [ "$MAIN_PAUSADO" = "true" ]; then echo "main.yml pausado por seguranca pos-suspensao. Para religar: MAIN_PAUSADO=false"; exit 0; fi
+      - name: Checkout do Repositorio
+        if: env.MAIN_PAUSADO != 'true'
         uses: actions/checkout@v4
-
       - name: Configurar Python
+        if: env.MAIN_PAUSADO != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: 'pip'
-
-      - name: Instalar Dependências
+      - name: Instalar Dependencias
+        if: env.MAIN_PAUSADO != 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Escolhe o provedor de IA (Gemini, Groq ou OpenRouter)
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      - name: Escolhe o provedor de IA (1 tentativa de teste)
+        if: env.MAIN_PAUSADO != 'true'
         run: |
-          # 1) Gemini (dois modelos). 2) Se falharem (429/503): Groq. 3) Depois: OpenRouter.
           PRIM="${GEMINI_MODEL:-gemini/gemini-3.7-flash}"; PRIM="${PRIM#gemini/}"
           ESCOLHIDO=""
           for M in "$PRIM" gemini-3.8-flash; do
@@ -44,8 +82,7 @@ jobs:
             if [ "$CODE" = "200" ]; then ESCOLHIDO="$M"; break; fi
           done
           PROV=""
-          if [ -n "$ESCOLHIDO" ]; then
-            PROV=gemini
+          if [ -n "$ESCOLHIDO" ]; then PROV=gemini
           else
             if [ -n "$GROQ_API_KEY" ]; then
               GCODE=$(curl -s -o /dev/null -w "%{http_code}" -m 30 --connect-timeout 10 https://api.groq.com/openai/v1/chat/completions \
@@ -62,71 +99,13 @@ jobs:
           echo "PROVEDOR_ESCOLHIDO=$PROV" >> $GITHUB_ENV
           echo "GEMINI_ESCOLHIDO=gemini/$ESCOLHIDO" >> $GITHUB_ENV
 
-      - name: Executar Pipeline Principal
+      - name: Executar Pipeline Principal (1 tentativa apenas)
+        if: env.MAIN_PAUSADO != 'true'
         env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           LLM_PROVIDER: ${{ env.PROVEDOR_ESCOLHIDO || secrets.LLM_PROVIDER || 'gemini' }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ env.GEMINI_ESCOLHIDO || secrets.GEMINI_MODEL }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
-          GH_PAT_VARIABLES: ${{ secrets.GH_PAT_VARIABLES }}  # opcional: deixa o healer atualizar a Variable
-          FABRICA_HASHTAGS_INSTAGRAM: ${{ vars.FABRICA_HASHTAGS_INSTAGRAM || secrets.FABRICA_HASHTAGS_INSTAGRAM || '20' }}
-          FABRICA_HASHTAGS_FACEBOOK: ${{ vars.FABRICA_HASHTAGS_FACEBOOK || secrets.FABRICA_HASHTAGS_FACEBOOK || '20' }}
-          MODEL: ${{ secrets.MODEL }}
-          PRODUTO_TOPICO: ${{ secrets.PRODUTO_TOPICO }}
-          IMAGEM_PADRAO_URL: ${{ secrets.IMAGEM_PADRAO_URL }}
-          UNSPLASH_API_KEY: ${{ secrets.UNSPLASH_API_KEY }}
-          META_APP_ID: ${{ secrets.META_APP_ID }}
-          META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
-          META_LONG_LIVED_TOKEN: ${{ secrets.META_LONG_LIVED_TOKEN }}
-          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
-          INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
-          BUSINESS_PORTFOLIO_ID: ${{ secrets.BUSINESS_PORTFOLIO_ID }}
-          # Padrao seguro: simula (nao publica). Para publicar de verdade, crie o Secret DRY_RUN = false
-          DRY_RUN: ${{ secrets.DRY_RUN || 'true' }}
         run: |
-          # Até 3 tentativas, trocando de provedor de IA se der 429/503. Também em modo real: não há risco de
-          # postar em duplicidade, porque cada rede que publica deixa uma marca (POST_MARKER_DIR) e uma nova
-          # tentativa nunca repete a rede já publicada. Só repete se faltar rede e não houver bloqueio
-          # definitivo (ex.: nenhum produto pronto no catálogo).
           export POST_MARKER_DIR="$RUNNER_TEMP/marcas"; rm -rf "$POST_MARKER_DIR"; mkdir -p "$POST_MARKER_DIR"
           export POST_REDES="facebook,instagram"
-          P1="$LLM_PROVIDER"
-          ORDER="$P1"
-          for P in gemini groq openrouter; do
-            [ "$P" = "$P1" ] && continue
-            if [ "$P" = "groq" ] && [ -z "$GROQ_API_KEY" ]; then continue; fi
-            if [ "$P" = "openrouter" ] && [ -z "$OPENROUTER_API_KEY" ]; then continue; fi
-            ORDER="$ORDER $P"
-          done
-          REAL=true; if [ "${DRY_RUN,,}" = "true" ]; then REAL=false; fi
-          N=3
-          for i in $(seq 1 $N); do
-            # se houver menos provedores que tentativas, a lista recomeça (melhor repetir um provedor do que desistir)
-            COUNT=$(echo $ORDER | wc -w)
-            PROV=$(echo $ORDER | cut -d' ' -f$(( (i - 1) % COUNT + 1 )))
-            export LLM_PROVIDER="$PROV"
-            echo "Tentativa $i de $N com o provedor $PROV"
-            RC=0
-            python main.py || RC=$?
-            if [ "$REAL" = false ]; then
-              if [ $RC -eq 0 ]; then exit 0; fi
-            else
-              ST=$(python -m fabrica_produtos marcas 2>/dev/null | head -1)
-              echo "Situação das publicações: $ST"
-              if [ "$ST" = "completo" ]; then exit 0; fi
-              if [ "$ST" = "bloqueado" ]; then
-                echo "::warning::Publicação bloqueada de propósito (veja o motivo acima). Nada a repetir."; exit 0
-              fi
-            fi
-            echo "Tentativa $i de $N sem concluir."
-            if [ $i -lt $N ]; then sleep 30; fi
-          done
-          if [ "$REAL" = true ]; then
-            ST=$(python -m fabrica_produtos marcas 2>/dev/null | head -1)
-            if [ "$ST" = "parcial" ]; then
-              echo "::error::Só uma das redes publicou (Facebook ou Instagram). Confira as duas antes de rodar de novo."
-            fi
-          fi
-          exit 1
+          # 1 tentativa apenas - sem loop de 3x. Se falhar, tenta de novo amanha, nao na mesma hora.
+          python main.py
