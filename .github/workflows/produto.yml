@@ -1,66 +1,63 @@
-name: Fabrica de Produtos (criar, revisar, registrar)
+name: Fabrica de Produtos - Unificado (1 commit por dia)
+
+# UNIFICADO - substitui produto.yml
+# Regras pos-suspensao GitHub (ticket #4851740):
+# - 1 execucao por dia, 1 commit por dia
+# - Sem GitHub Pages (sem pages-build-deployment)
+# - Sem index.html de loja, sem preco, sem botao Comprar no repo
+# - Vendas SOMENTE na Cakto / Kiwify / Hotmart (externo)
+# - main.yml (postar no Facebook/Instagram) fica PAUSADO por enquanto
 
 on:
   workflow_dispatch:
     inputs:
       acao:
-        description: "criar | verificar | sondar | definir-link | status | hub | reels | capas"
+        description: "criar | verificar | status"
         default: "criar"
       produto_id:
-        description: "Só para definir-link: id do produto (ex.: p20261003-1)"
+        description: "So para definir-link"
         required: false
       link_compra:
-        description: "Só para definir-link: link de compra copiado da plataforma"
+        description: "So para definir-link: link copiado da plataforma"
         required: false
   schedule:
-    - cron: "0 9 * * *"     # 06:00 Brasília -> cria os produtos do dia em sequência, até FABRICA_MAX_POR_DIA
-    - cron: "0 15 * * *"    # 12:00 Brasília -> completa o que faltar (o agendador do GitHub às vezes não dispara; teto atingido = sai verde)
-    - cron: "0 21 * * *"    # 18:00 Brasília -> idem
-    - cron: "30 */6 * * *"  # a cada 6 h -> procura o link dos produtos cadastrados e libera
+    - cron: "0 9 * * *"  # UNICO gatilho: 06:00 Brasilia
 
 permissions:
   contents: write
 
 concurrency:
-  group: fabrica-produtos
+  group: fabrica-produtos-unificado
   cancel-in-progress: false
 
 jobs:
   fabrica:
     runs-on: ubuntu-latest
-    timeout-minutes: 45   # sem isto uma chamada de IA travada prendia o robô por 6 h (execução de 08/10)
+    timeout-minutes: 45
     env:
-      # --- IA (o orientador usa um provedor diferente do criador quando há mais de uma chave) ---
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       GROQ_MODEL: ${{ vars.GROQ_MODEL }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
-      GH_PAT_VARIABLES: ${{ secrets.GH_PAT_VARIABLES }}  # opcional: deixa o healer atualizar a Variable
+      GH_PAT_VARIABLES: ${{ secrets.GH_PAT_VARIABLES }}
       FABRICA_HASHTAGS_INSTAGRAM: ${{ vars.FABRICA_HASHTAGS_INSTAGRAM || secrets.FABRICA_HASHTAGS_INSTAGRAM || '20' }}
       FABRICA_HASHTAGS_FACEBOOK: ${{ vars.FABRICA_HASHTAGS_FACEBOOK || secrets.FABRICA_HASHTAGS_FACEBOOK || '20' }}
-      # --- Cakto (Painel Cakto > Integracoes > Cakto API > Criar chave de API) ---
       CAKTO_CLIENT_ID: ${{ secrets.CAKTO_CLIENT_ID }}
       CAKTO_CLIENT_SECRET: ${{ secrets.CAKTO_CLIENT_SECRET }}
-      CAKTO_SALES_PAGE: ${{ vars.CAKTO_SALES_PAGE }}   # opcional: URL da pagina de vendas, se a Cakto exigir
-      # --- Google Drive (hospeda o PDF que a Cakto entrega por e-mail) ---
-      # GDRIVE_FOLDER_ID = trecho final da URL da pasta. Conta de serviço só grava em Drive COMPARTILHADO;
-      # em Gmail comum use as tres GDRIVE_OAUTH_* (veja fabrica_produtos/README.md).
+      CAKTO_SALES_PAGE: ${{ vars.CAKTO_SALES_PAGE }}
       GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
-      GDRIVE_CREDENTIALS_JSON: ${{ secrets.GDRIVE_CREDENTIALS_JSON }}   # nome alternativo do mesmo Secret
+      GDRIVE_CREDENTIALS_JSON: ${{ secrets.GDRIVE_CREDENTIALS_JSON }}
       GDRIVE_FOLDER_ID: ${{ vars.GDRIVE_FOLDER_ID || secrets.GDRIVE_FOLDER_ID }}
       GDRIVE_OAUTH_CLIENT_ID: ${{ secrets.GDRIVE_OAUTH_CLIENT_ID }}
       GDRIVE_OAUTH_CLIENT_SECRET: ${{ secrets.GDRIVE_OAUTH_CLIENT_SECRET }}
       GDRIVE_OAUTH_REFRESH_TOKEN: ${{ secrets.GDRIVE_OAUTH_REFRESH_TOKEN }}
-      # --- Interruptores (podem ficar em Variables OU em Secrets; Variables vale primeiro) ---
-      FABRICA_DRY_RUN: ${{ vars.FABRICA_DRY_RUN || secrets.FABRICA_DRY_RUN || 'true' }}   # true = não cria nada nas plataformas
-      FABRICA_PAUSADA: ${{ vars.FABRICA_PAUSADA || secrets.FABRICA_PAUSADA || 'false' }}  # true = pausa a criação de produtos novos
-      FABRICA_MAX_POR_DIA: ${{ vars.FABRICA_MAX_POR_DIA || secrets.FABRICA_MAX_POR_DIA || '5' }}  # teto de produtos novos por dia
+      FABRICA_DRY_RUN: ${{ vars.FABRICA_DRY_RUN || secrets.FABRICA_DRY_RUN || 'true' }}
+      FABRICA_PAUSADA: ${{ vars.FABRICA_PAUSADA || secrets.FABRICA_PAUSADA || 'false' }}
+      FABRICA_MAX_POR_DIA: '1'  # TRAVADO EM 1 por dia ate o GitHub voltar a confiar
       PRODUTO_TOPICO: ${{ secrets.PRODUTO_TOPICO }}
-      # --- entradas manuais (passam por variável de ambiente, nunca direto no script) ---
       EVENTO: ${{ github.event_name }}
-      CRON: ${{ github.event.schedule }}
       ACAO_INPUT: ${{ github.event.inputs.acao }}
       PRODUTO_ID: ${{ github.event.inputs.produto_id }}
       LINK_COMPRA: ${{ github.event.inputs.link_compra }}
@@ -73,36 +70,32 @@ jobs:
           cache-dependency-path: fabrica_produtos/requirements_fabrica.txt
       - run: pip install -r fabrica_produtos/requirements_fabrica.txt
 
-      - name: Executa a fabrica
+      - name: Executa a fabrica (1 lote por dia)
         run: |
-          if [ "$EVENTO" = "workflow_dispatch" ]; then ACAO="${ACAO_INPUT:-criar}"
-          elif [ "$CRON" = "0 9 * * *" ] || [ "$CRON" = "0 15 * * *" ] || [ "$CRON" = "0 21 * * *" ]; then ACAO=criar; LOTE="--lote"
-          else ACAO=verificar; fi
+          if [ "$EVENTO" = "workflow_dispatch" ]; then ACAO="${ACAO_INPUT:-criar}"; else ACAO=criar; LOTE="--lote"; fi
           echo "Acao: $ACAO"
           if [ "$ACAO" = "definir-link" ]; then
-            if [ -z "$PRODUTO_ID" ] || [ -z "$LINK_COMPRA" ]; then
-              echo "definir-link exige produto_id e link_compra"; exit 1
-            fi
+            if [ -z "$PRODUTO_ID" ] || [ -z "$LINK_COMPRA" ]; then echo "definir-link exige produto_id e link_compra"; exit 1; fi
             python -m fabrica_produtos definir-link --id "$PRODUTO_ID" --link "$LINK_COMPRA"
           else
             python -m fabrica_produtos "$ACAO" ${LOTE:-}
           fi
 
-      - name: Atualiza a pagina link-na-bio (so le o catalogo, sem IA)
-        if: always()
-        run: python -m fabrica_produtos hub
+      # REMOVIDO: passo "Atualiza a pagina link-na-bio (hub)"
+      # Motivo: ele gerava index.html e alimentava o GitHub Pages, que causou a suspensao.
+      # O link-na-bio agora fica so na bio do Instagram/TikTok, apontando para Cakto.
 
       - name: Roteiros de Reels dos produtos novos
         if: always()
-        continue-on-error: true   # falha de IA nao pode impedir o commit do catalogo; tenta de novo na proxima
+        continue-on-error: true
         run: python -m fabrica_produtos reels
 
-      - name: Capas na Cakto (envia a imagem dos produtos que estao Sem imagem; idempotente)
+      - name: Capas na Cakto
         if: always()
-        continue-on-error: true   # erro de imagem aparece como CAKTO_IMAGEM_ERROR no resumo; nao derruba o commit do catalogo
+        continue-on-error: true
         run: python -m fabrica_produtos capas
 
-      - name: Capas para upload manual na Cakto (baixe o zip e envie pelo painel se a API nao gravar a imagem)
+      - name: Capas para upload manual na Cakto
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -110,18 +103,21 @@ jobs:
           path: docs/capas/*.png
           if-no-files-found: ignore
 
-      - name: Guarda o catalogo no repositorio
+      - name: UNICO commit do dia - Guarda o catalogo
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # So catalogo + capas. NUNCA index.html de loja, nunca Pages.
           git add catalogo docs
+          # Trava de seguranca: se por acidente existir index.html de loja, nao commita
+          if git diff --cached --name-only | grep -q "index.html"; then echo "::error::index.html de loja detectado, abortando commit"; exit 1; fi
           if git diff --cached --quiet; then echo "Catalogo sem mudancas"; exit 0; fi
-          git commit -m "Atualiza catalogo, link na bio e roteiros"
+          git commit -m "Atualiza catalogo (1x/dia)"
           git pull --rebase origin "$GITHUB_REF_NAME"
           git push origin "HEAD:$GITHUB_REF_NAME"
 
-      - name: Pacotes de cadastro (baixe na pagina da execucao)
+      - name: Pacotes de cadastro
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -131,8 +127,6 @@ jobs:
           retention-days: 14
 
   cakto-browser:
-    # Plano C da capa: a API da Cakto responde 200 mas nao grava `image`; o navegador sobe a capa pelo painel.
-    # (`secrets` nao existe no `if` de job: o segredo entra por env e e checado no passo.)
     needs: fabrica
     if: always() && needs.fabrica.result != 'cancelled'
     runs-on: ubuntu-latest
@@ -150,7 +144,7 @@ jobs:
       - uses: actions/checkout@v4
         if: env.CAKTO_EMAIL != ''
         with:
-          ref: ${{ github.ref_name }}   # pega o commit do catalogo e das capas feito pelo job anterior
+          ref: ${{ github.ref_name }}
       - uses: actions/setup-python@v5
         if: env.CAKTO_EMAIL != ''
         with:
@@ -162,7 +156,7 @@ jobs:
           playwright install --with-deps chromium
       - name: Sobe as capas pelo painel da Cakto
         if: env.CAKTO_EMAIL != ''
-        continue-on-error: true   # painel mudou/captcha: o produto segue Ativo e o zip capas-cakto permite o upload manual
+        continue-on-error: true
         run: python -m fabrica_produtos.cakto_browser
       - name: Screenshots de depuracao
         if: always() && env.CAKTO_EMAIL != ''
