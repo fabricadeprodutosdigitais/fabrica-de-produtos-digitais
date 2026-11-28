@@ -1,8 +1,15 @@
-name: Reels (publicacao diaria)
+name: Reels (1x por dia, sem commit)
+
+# CORRIGIDO pos-suspensao #4851740
+# - Mantido 1x/dia (15:00 Brasilia)
+# - REMOVIDO o commit "Guarda o registro de Reels publicados"
+#   Motivo: produto.yml ja faz o UNICO commit do dia. Se o reels tambem commitar,
+#   vira 2 commits/dia + conflito de rebase com o produto.yml.
+# - Agora o registro fica so como Artifact, nao faz push.
 
 on:
   schedule:
-    - cron: "0 18 * * *"   # 15:00 Brasilia, todo dia
+    - cron: "0 18 * * *"   # 15:00 Brasilia, 1x por dia
   workflow_dispatch:
     inputs:
       dry_run:
@@ -13,7 +20,7 @@ on:
         required: false
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: reels
@@ -24,10 +31,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      # Agendado = publica de verdade, a menos que a Variable REELS_DRY_RUN=true. Manual = vale o campo dry_run.
       REELS_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run || vars.REELS_DRY_RUN || 'false' }}
       REELS_ONLY: ${{ github.event.inputs.only }}
-      # IA (so o roteiro de produto novo usa; o model_healer troca o modelo gratis que sair do ar)
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
@@ -37,11 +42,9 @@ jobs:
       GH_PAT_VARIABLES: ${{ secrets.GH_PAT_VARIABLES }}
       FABRICA_HASHTAGS_INSTAGRAM: ${{ vars.FABRICA_HASHTAGS_INSTAGRAM || secrets.FABRICA_HASHTAGS_INSTAGRAM || '20' }}
       FABRICA_HASHTAGS_FACEBOOK: ${{ vars.FABRICA_HASHTAGS_FACEBOOK || secrets.FABRICA_HASHTAGS_FACEBOOK || '20' }}
-      # Meta
       META_LONG_LIVED_TOKEN: ${{ secrets.META_LONG_LIVED_TOKEN }}
       FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
       INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
-      # Legendas (as mesmas Variables dos outros robos)
       LINK_BIO_INSTAGRAM: ${{ vars.LINK_BIO_INSTAGRAM || secrets.LINK_BIO_INSTAGRAM }}
       LINK_FACEBOOK: ${{ vars.LINK_FACEBOOK || secrets.LINK_FACEBOOK }}
       REELS_LINK: ${{ vars.REELS_LINK }}
@@ -56,10 +59,10 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
           pip install requests pillow numpy
-      - name: Musicas livres (opcional; sem chave segue com os mp3 de assets/music)
+      - name: Musicas livres (opcional)
         run: python scripts/fetch_music.py || echo "usando mp3 de assets/music/"
 
-      - name: Roteiro do produto novo (IA gratuita com model_healer; falha aqui nao impede o Reel)
+      - name: Roteiro do produto novo
         continue-on-error: true
         run: |
           pip install -q -r fabrica_produtos/requirements_fabrica.txt
@@ -72,17 +75,7 @@ jobs:
           python -m fabrica_produtos.reels_publicar $ARGS | tee -a "$GITHUB_STEP_SUMMARY"
           exit "${PIPESTATUS[0]}"
 
-      - name: Guarda o registro de Reels publicados
-        if: always()
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add catalogo
-          if git diff --cached --quiet; then echo "Sem mudancas"; exit 0; fi
-          git commit -m "Atualiza Reels publicados"
-          git pull --rebase origin "$GITHUB_REF_NAME"
-          git push origin "HEAD:$GITHUB_REF_NAME"
-
+      # SEM COMMIT - o unico commit do dia e feito pelo produto.yml
       - name: Video e legendas (baixe na pagina da execucao)
         if: always()
         uses: actions/upload-artifact@v4
